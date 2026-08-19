@@ -1,0 +1,44 @@
+stateDiagram-v2
+    [*] --> IDLE
+
+    IDLE --> WARMING : operator starts session
+    note right of WARMING
+        ModelRegistry.warm_all()
+        Whisper to GPU, opus-mt to GPU,
+        Ollama pinned keep_alive = -1
+        typical 20 to 40 s cold
+    end note
+
+    WARMING --> RUNNING : all models resident<br/>and mic open
+    WARMING --> FAILED : model load error<br/>or mic unavailable
+
+    RUNNING --> DEGRADED : queue depth > threshold<br/>or CUDA OOM<br/>or LLM timeout
+    DEGRADED --> RUNNING : queues drained<br/>and context model healthy
+
+    RUNNING --> PAUSED : operator pauses
+    DEGRADED --> PAUSED : operator pauses
+    PAUSED --> RUNNING : operator resumes
+
+    RUNNING --> STOPPING : operator stops
+    DEGRADED --> STOPPING : operator stops
+    PAUSED --> STOPPING : operator stops
+
+    STOPPING --> IDLE : queues flushed,<br/>sinks closed,<br/>session row finalized
+
+    FAILED --> WARMING : operator retries
+    FAILED --> IDLE : operator aborts
+
+    state RUNNING {
+        [*] --> Listening
+        Listening --> Capturing : VAD speech start
+        Capturing --> Transcribing : VAD speech end
+        Transcribing --> Enriching
+        Enriching --> Translating
+        Translating --> Publishing
+        Publishing --> Listening
+    }
+
+    state DEGRADED {
+        [*] --> FastPathOnly
+        FastPathOnly --> FastPathOnly : opus-mt for every segment
+    }

@@ -1,0 +1,53 @@
+flowchart TB
+    subgraph SANCT["Sanctuary"]
+        PMIC(["Pulpit mic"])
+        MIXER["Sound desk<br/>mixer aux out"]
+        QR(["Printed QR code<br/>-> http://sermon.local/join"])
+        PMIC --> MIXER
+    end
+
+    subgraph MACHINE["Host machine (backstage)"]
+        direction TB
+
+        subgraph DOCKER["Docker Compose"]
+            APP["sermon-app<br/>FastAPI + pipeline<br/>python:3.11-slim + CUDA"]
+            OLL["ollama<br/>gemma3:12b pinned"]
+            VOL[("volume: ./data<br/>sermon.db, glossary,<br/>bible_books.csv")]
+            MDL[("volume: ./models<br/>whisper-ct2, opus-mt")]
+            APP <-->|"HTTP localhost:11434"| OLL
+            APP --- VOL
+            APP --- MDL
+            OLL --- MDL
+        end
+
+        subgraph HW["Hardware"]
+            CPU["i5-13600K<br/>VAD, queues,<br/>FastAPI, WS fanout"]
+            GPU["16GB GPU<br/>Whisper ~2.0GB<br/>opus-mt ~0.3GB<br/>gemma3:12b ~7.5GB<br/>~5GB headroom"]
+            AUDIO["USB audio interface<br/>16 kHz mono in"]
+        end
+
+        APP -.-> CPU
+        APP -.-> GPU
+        OLL -.-> GPU
+        AUDIO --> APP
+    end
+
+    ROUTER{{"Church WiFi router<br/>mDNS: sermon.local<br/>no internet needed"}}
+
+    subgraph CLIENTS["Attendees and operator"]
+        P1(["Phone 1<br/>lang=en"])
+        P2(["Phone 2<br/>lang=en"])
+        PN(["... up to ~120<br/>WebSocket listeners"])
+        OP(["Operator laptop<br/>/operator"])
+    end
+
+    MIXER -->|"line out (XLR/TRS)"| AUDIO
+    APP <-->|":8000 HTTP + WS"| ROUTER
+    ROUTER <--> P1
+    ROUTER <--> P2
+    ROUTER <--> PN
+    ROUTER <--> OP
+    QR -.->|"scan"| P1
+
+    NOTE["Restart policy: unless-stopped<br/>Session state recoverable from SQLite<br/>Zero external network calls during service"]
+    MACHINE -.- NOTE

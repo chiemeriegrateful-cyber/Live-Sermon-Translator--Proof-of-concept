@@ -1,0 +1,195 @@
+classDiagram
+    direction LR
+
+    class Session {
+        +id: str
+        +title: str
+        +source_lang: str
+        +target_langs: List~str~
+        +state: SessionState
+        +started_at: datetime
+        +ended_at: datetime
+        +segment_count: int
+        +duration_s() float
+    }
+
+    class SessionState {
+        <<enumeration>>
+        IDLE
+        WARMING
+        RUNNING
+        DEGRADED
+        PAUSED
+        STOPPING
+        FAILED
+    }
+
+    class AudioChunk {
+        +session_id: str
+        +seq: int
+        +pcm: bytes
+        +sample_rate: int
+        +start_ts: float
+        +end_ts: float
+        +duration_ms() int
+    }
+
+    class Utterance {
+        +id: str
+        +session_id: str
+        +seq: int
+        +audio: bytes
+        +start_ts: float
+        +end_ts: float
+        +speech_ms: int
+    }
+
+    class Transcript {
+        +utterance_id: str
+        +text: str
+        +lang: str
+        +avg_logprob: float
+        +no_speech_prob: float
+        +asr_model: str
+        +latency_ms: int
+        +is_reliable() bool
+    }
+
+    class EnrichedSegment {
+        +transcript: Transcript
+        +context_window: List~str~
+        +glossary_hits: List~GlossaryHit~
+        +scripture_refs: List~ScriptureRef~
+        +ends_mid_clause: bool
+        +has_open_pronoun: bool
+        +needs_context() bool
+    }
+
+    class TranslationSegment {
+        +id: str
+        +session_id: str
+        +seq: int
+        +source_text: str
+        +target_text: str
+        +source_lang: str
+        +target_lang: str
+        +path_used: TranslationPath
+        +model_id: str
+        +latency_ms: int
+        +created_at: datetime
+        +final: bool
+    }
+
+    class TranslationPath {
+        <<enumeration>>
+        FAST
+        CONTEXT
+        DEGRADED_FAST
+    }
+
+    class ScriptureRef {
+        +book_de: str
+        +book_en: str
+        +chapter: int
+        +verse_start: int
+        +verse_end: int
+        +render_en() str
+    }
+
+    class GlossaryHit {
+        +term_de: str
+        +term_en: str
+        +span_start: int
+        +span_end: int
+    }
+
+    class Listener {
+        +id: str
+        +session_id: str
+        +lang: str
+        +connected_at: datetime
+        +last_seen: datetime
+        +transport: str
+    }
+
+    class SessionEvent {
+        +type: EventType
+        +session_id: str
+        +payload: dict
+        +ts: float
+    }
+
+    class LatencyMetrics {
+        +stage: str
+        +p50_ms: float
+        +p95_ms: float
+        +count: int
+        +observe(ms: float) None
+    }
+
+    class SessionOrchestrator {
+        -source: AudioSource
+        -vad: VoiceActivityDetector
+        -asr: ASRAdapter
+        -enricher: ContextEnricher
+        -translator: TranslationAdapter
+        -bus: SegmentBus
+        -registry: ModelRegistry
+        -queues: PipelineQueues
+        +start(cfg: SessionConfig) Session
+        +stop() None
+        +health() HealthReport
+        +check_backpressure() None
+        +on_stage_error(e: Exception) None
+    }
+
+    class ModelRegistry {
+        -loaded: Dict
+        +warm_all() None
+        +pin(model_id: str) None
+        +unload(model_id: str) None
+        +vram_used_mb() int
+        +is_resident(model_id: str) bool
+    }
+
+    class SegmentBus {
+        -subscribers: List~OutputSink~
+        +subscribe(sink: OutputSink) None
+        +unsubscribe(sink: OutputSink) None
+        +publish(seg: TranslationSegment) None
+        +emit_event(e: SessionEvent) None
+    }
+
+    class WebSocketGateway {
+        -channels: Dict
+        +register(ws, lang: str) Listener
+        +drop(listener_id: str) None
+        +broadcast(lang: str, payload: dict) None
+        +listener_count(lang: str) int
+        +replay(lang: str, n: int) List~dict~
+    }
+
+    class PipelineQueues {
+        +audio: BoundedQueue
+        +asr: BoundedQueue
+        +translate: BoundedQueue
+        +overflow_policy: str
+        +max_depth() int
+    }
+
+    Session "1" --> "1" SessionState
+    Session "1" --> "*" TranslationSegment
+    Session "1" --> "*" Listener
+    AudioChunk "*" --> "1" Utterance : aggregated by VAD
+    Utterance "1" --> "1" Transcript
+    Transcript "1" --> "1" EnrichedSegment
+    EnrichedSegment "1" --> "1" TranslationSegment
+    EnrichedSegment "1" --> "*" ScriptureRef
+    EnrichedSegment "1" --> "*" GlossaryHit
+    TranslationSegment --> TranslationPath
+    SessionOrchestrator --> ModelRegistry
+    SessionOrchestrator --> SegmentBus
+    SessionOrchestrator --> PipelineQueues
+    SessionOrchestrator --> LatencyMetrics
+    SegmentBus --> SessionEvent
+    WebSocketGateway "1" --> "*" Listener

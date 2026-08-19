@@ -1,0 +1,197 @@
+classDiagram
+    direction TB
+
+    %% ===== PORTS =====
+    class AudioSource {
+        <<interface>>
+        +open() None
+        +read() AudioChunk
+        +close() None
+        +is_open bool
+    }
+
+    class VoiceActivityDetector {
+        <<interface>>
+        +push(chunk: AudioChunk) UtteranceEvent
+        +reset() None
+        +threshold float
+        +hangover_ms int
+    }
+
+    class ASRAdapter {
+        <<interface>>
+        +transcribe(u: Utterance) Transcript
+        +warm() None
+        +unload() None
+        +model_id str
+        +device str
+    }
+
+    class TranslationAdapter {
+        <<interface>>
+        +translate(seg: EnrichedSegment) TranslationSegment
+        +warm() None
+        +unload() None
+        +model_id str
+        +supports_context bool
+    }
+
+    class TTSAdapter {
+        <<interface>>
+        +synthesize(text: str, lang: str) AudioClip
+        +warm() None
+        +voice_id str
+    }
+
+    class OutputSink {
+        <<interface>>
+        +on_segment(seg: TranslationSegment) None
+        +on_session_event(e: SessionEvent) None
+        +name str
+    }
+
+    class Repository~T~ {
+        <<interface>>
+        +add(entity: T) str
+        +get(id: str) T
+        +list(filter: dict) List~T~
+    }
+
+    %% ===== ADAPTERS: AUDIO =====
+    class MicrophoneSource {
+        -device: str
+        -sample_rate: int
+        -stream: InputStream
+        +open() None
+        +read() AudioChunk
+        +close() None
+    }
+
+    class FileSource {
+        -path: Path
+        -realtime_pacing: bool
+        +open() None
+        +read() AudioChunk
+        +close() None
+    }
+
+    class SileroVAD {
+        -session: InferenceSession
+        -state: VADState
+        -speech_start_ts: float
+        +push(chunk: AudioChunk) UtteranceEvent
+        +reset() None
+    }
+
+    %% ===== ADAPTERS: ASR =====
+    class FasterWhisperASR {
+        -model: WhisperModel
+        -compute_type: str
+        -beam_size: int
+        -language: str
+        +transcribe(u: Utterance) Transcript
+        +warm() None
+        +unload() None
+    }
+
+    class VoxtralASR {
+        -engine: VoxtralEngine
+        -streaming: bool
+        +transcribe(u: Utterance) Transcript
+        +warm() None
+    }
+
+    %% ===== ADAPTERS: TRANSLATION =====
+    class OpusMTTranslator {
+        -translator: CT2Translator
+        -tokenizer: MarianTokenizer
+        +translate(seg: EnrichedSegment) TranslationSegment
+        +warm() None
+    }
+
+    class OllamaLLMTranslator {
+        -client: OllamaClient
+        -model: str
+        -temperature: float
+        -keep_alive: int
+        +translate(seg: EnrichedSegment) TranslationSegment
+        +build_prompt(seg: EnrichedSegment) str
+        +warm() None
+    }
+
+    class HybridTranslator {
+        -fast: TranslationAdapter
+        -context: TranslationAdapter
+        -degraded: bool
+        +translate(seg: EnrichedSegment) TranslationSegment
+        +needs_context(seg: EnrichedSegment) bool
+        +set_degraded(on: bool) None
+    }
+
+    %% ===== ADAPTERS: TTS =====
+    class PiperTTS {
+        -voice_path: Path
+        +synthesize(text: str, lang: str) AudioClip
+        +warm() None
+    }
+
+    %% ===== CONTEXT ENGINE =====
+    class ContextEnricher {
+        -window: Deque~TranslationSegment~
+        -window_size: int
+        -glossary: GlossaryResolver
+        -scripture: ScriptureTagger
+        +enrich(t: Transcript) EnrichedSegment
+        +remember(seg: TranslationSegment) None
+    }
+
+    class GlossaryResolver {
+        -entries: Dict
+        +find(text: str) List~GlossaryHit~
+        +enforce(target: str, hits: List) str
+        +reload() None
+    }
+
+    class ScriptureTagger {
+        -book_lexicon: Dict
+        -verse_pattern: Pattern
+        +tag(text: str) List~ScriptureRef~
+        +canonical_en(ref: ScriptureRef) str
+    }
+
+    %% ===== SINKS =====
+    class SubtitleSink {
+        -gateway: WebSocketGateway
+        +on_segment(seg: TranslationSegment) None
+        +on_session_event(e: SessionEvent) None
+    }
+
+    class TranscriptLogSink {
+        -repo: SegmentRepository
+        +on_segment(seg: TranslationSegment) None
+    }
+
+    class TTSSink {
+        -tts: TTSAdapter
+        -gateway: WebSocketGateway
+        +on_segment(seg: TranslationSegment) None
+    }
+
+    %% ===== RELATIONSHIPS =====
+    AudioSource <|.. MicrophoneSource
+    AudioSource <|.. FileSource
+    VoiceActivityDetector <|.. SileroVAD
+    ASRAdapter <|.. FasterWhisperASR
+    ASRAdapter <|.. VoxtralASR
+    TranslationAdapter <|.. OpusMTTranslator
+    TranslationAdapter <|.. OllamaLLMTranslator
+    TranslationAdapter <|.. HybridTranslator
+    TTSAdapter <|.. PiperTTS
+    OutputSink <|.. SubtitleSink
+    OutputSink <|.. TranscriptLogSink
+    OutputSink <|.. TTSSink
+
+    HybridTranslator o-- TranslationAdapter : delegates to fast + context
+    ContextEnricher --> GlossaryResolver
+    ContextEnricher --> ScriptureTagger
+    TTSSink --> TTSAdapter

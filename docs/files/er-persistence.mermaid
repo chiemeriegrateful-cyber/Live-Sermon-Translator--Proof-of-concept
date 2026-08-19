@@ -1,0 +1,86 @@
+erDiagram
+    SESSION ||--o{ SEGMENT : produces
+    SESSION ||--o{ LISTENER_LOG : serves
+    SESSION ||--o{ SESSION_EVENT : records
+    SEGMENT ||--o{ SEGMENT_SCRIPTURE : references
+    SCRIPTURE_BOOK ||--o{ SEGMENT_SCRIPTURE : identified_as
+    GLOSSARY_ENTRY ||--o{ SEGMENT_GLOSSARY : applied_in
+    SEGMENT ||--o{ SEGMENT_GLOSSARY : uses
+
+    SESSION {
+        text id PK
+        text title
+        text source_lang
+        text target_langs
+        text state
+        datetime started_at
+        datetime ended_at
+        int segment_count
+    }
+
+    SEGMENT {
+        text id PK
+        text session_id FK
+        int seq
+        text source_text
+        text target_text
+        text target_lang
+        text path_used
+        text asr_model
+        text mt_model
+        int asr_latency_ms
+        int mt_latency_ms
+        real avg_logprob
+        datetime created_at
+    }
+
+    SCRIPTURE_BOOK {
+        int id PK
+        text name_de
+        text name_en
+        text abbrev_de
+        text abbrev_en
+        int chapter_count
+    }
+
+    SEGMENT_SCRIPTURE {
+        int id PK
+        text segment_id FK
+        int book_id FK
+        int chapter
+        int verse_start
+        int verse_end
+    }
+
+    GLOSSARY_ENTRY {
+        int id PK
+        text term_de
+        text term_en
+        bool case_sensitive
+        text notes
+        datetime updated_at
+    }
+
+    SEGMENT_GLOSSARY {
+        int id PK
+        text segment_id FK
+        int glossary_id FK
+        int span_start
+        int span_end
+    }
+
+    LISTENER_LOG {
+        int id PK
+        text session_id FK
+        text lang
+        datetime connected_at
+        datetime disconnected_at
+    }
+
+    SESSION_EVENT {
+        int id PK
+        text session_id FK
+        text type
+        text payload
+        datetime ts
+    }

@@ -1,0 +1,77 @@
+flowchart TB
+    MIC(["Microphone<br/>USB / mixer out"])
+    OPPAGE(["Operator page<br/>browser"])
+    PHONES(["Attendee phones<br/>QR join, browser"])
+
+    subgraph HOST["Single host: i5-13600K, 16GB GPU, church LAN"]
+
+        subgraph API["FastAPI application"]
+            ORCH["SessionOrchestrator<br/>start / stop / health / degrade"]
+            REST["REST routers<br/>session, glossary, metrics"]
+            WSGW["WebSocketGateway<br/>ChannelRegistry per language"]
+        end
+
+        subgraph PIPE["Async pipeline, bounded queues"]
+            direction TB
+            SRC["AudioSource<br/>MicrophoneSource | FileSource"]
+            VAD["SileroVAD<br/>CPU, ~2MB ONNX"]
+            Q1{{"audio queue<br/>depth 8, drop_oldest"}}
+            ASR["FasterWhisperASR<br/>whisper-large-v3-turbo-german<br/>int8, GPU"]
+            Q2{{"asr queue<br/>depth 4"}}
+            ENR["ContextEnricher<br/>rolling window + glossary + scripture"]
+            Q3{{"translate queue<br/>depth 4"}}
+            ROUTE{"HybridTranslator<br/>route by need"}
+            FAST["OpusMTTranslator<br/>opus-mt-de-en, GPU"]
+            SLOW["OllamaLLMTranslator<br/>gemma3:12b Q4, GPU"]
+
+            SRC --> VAD --> Q1 --> ASR --> Q2 --> ENR --> Q3 --> ROUTE
+            ROUTE -->|"plain sentence<br/>or backpressure"| FAST
+            ROUTE -->|"pronoun / scripture<br/>/ glossary / mid-clause"| SLOW
+        end
+
+        BUS(("SegmentBus<br/>async pub/sub"))
+        FAST --> BUS
+        SLOW --> BUS
+
+        subgraph SINKS["OutputSink implementations"]
+            SUBS["SubtitleSink"]
+            LOGS["TranscriptLogSink"]
+            TTSS["TTSSink<br/>Piper, phase 5"]
+        end
+
+        BUS --> SUBS
+        BUS --> LOGS
+        BUS -.-> TTSS
+
+        subgraph CTX["Context resources, deterministic"]
+            GLOS["GlossaryResolver"]
+            SCRP["ScriptureTagger<br/>bible_books.csv + regex"]
+        end
+        ENR --- GLOS
+        ENR --- SCRP
+
+        DB[("SQLite<br/>sessions, segments,<br/>glossary, listeners")]
+        LOGS --> DB
+        GLOS --- DB
+        ORCH --- DB
+
+        SUBS --> WSGW
+        TTSS -.-> WSGW
+        ORCH --> SRC
+        ORCH -.->|"degrade signal"| ROUTE
+        REST --- ORCH
+
+        MODELS["ModelRegistry<br/>warm / pin / unload<br/>keep_alive = -1"]
+        MODELS -.-> ASR
+        MODELS -.-> FAST
+        MODELS -.-> SLOW
+        ORCH --> MODELS
+    end
+
+    MIC --> SRC
+    OPPAGE <--> REST
+    OPPAGE <--> WSGW
+    WSGW <--> PHONES
+
+    classDef future stroke-dasharray: 5 5,opacity:0.65
+    class TTSS future

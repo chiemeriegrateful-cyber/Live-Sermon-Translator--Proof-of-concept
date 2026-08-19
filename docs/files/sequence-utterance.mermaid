@@ -1,0 +1,80 @@
+sequenceDiagram
+    autonumber
+    actor PR as Preacher
+    participant SRC as MicrophoneSource
+    participant VAD as SileroVAD (CPU)
+    participant Q1 as audio queue
+    participant ASR as FasterWhisperASR (GPU)
+    participant ENR as ContextEnricher
+    participant SCR as ScriptureTagger
+    participant GLO as GlossaryResolver
+    participant HYB as HybridTranslator
+    participant FST as OpusMT (GPU)
+    participant LLM as Ollama gemma3:12b (GPU)
+    participant BUS as SegmentBus
+    participant SUB as SubtitleSink
+    participant LOG as TranscriptLogSink
+    participant GW as WebSocketGateway
+    participant PH as Attendee phone
+    participant DB as SQLite
+
+    PR->>SRC: speaks
+    loop every 32 ms frame
+        SRC->>VAD: AudioChunk
+        VAD->>VAD: score frame
+    end
+    VAD->>VAD: silence exceeds hangover_ms (300)
+    VAD->>Q1: Utterance (speech_ms >= min_speech_ms)
+
+    alt queue full
+        Q1->>Q1: drop_oldest, emit backpressure event
+    end
+
+    Q1->>ASR: dequeue Utterance
+    ASR->>ASR: transcribe int8, beam_size 1
+    ASR-->>ENR: Transcript (de)
+
+    alt no_speech_prob high or empty text
+        ENR->>ENR: discard segment, no publish
+    else usable transcript
+        ENR->>SCR: tag(text)
+        SCR-->>ENR: ScriptureRef list
+        ENR->>GLO: find(text)
+        GLO-->>ENR: GlossaryHit list
+        ENR->>ENR: attach rolling window (last 4 segments)
+        ENR->>HYB: EnrichedSegment
+
+        HYB->>HYB: needs_context()
+
+        alt degraded mode or plain sentence
+            HYB->>FST: translate
+            FST-->>HYB: target text (~60 ms)
+        else pronoun / scripture / glossary / mid-clause
+            HYB->>LLM: prompt with window + glossary + refs
+            LLM-->>HYB: target text (~650 ms)
+            opt LLM timeout or CUDA error
+                HYB->>FST: retry on fast path
+                FST-->>HYB: target text
+                HYB->>BUS: emit DEGRADE event
+            end
+        end
+
+        HYB->>GLO: enforce(target, hits)
+        GLO-->>HYB: corrected target
+        HYB->>BUS: publish TranslationSegment
+
+        par fan out to sinks
+            BUS->>SUB: on_segment
+            SUB->>GW: broadcast(lang="en", payload)
+            GW-->>PH: WebSocket frame
+            PH->>PH: render subtitle line
+        and
+            BUS->>LOG: on_segment
+            LOG--)DB: async insert
+        end
+
+        BUS->>ENR: remember(segment) for next window
+    end
+
+    Note over PR,PH: fast path ~0.6 s, context path ~1.3 s from end of speech
+    Note over BUS,GW: TTSSink subscribes here in phase 5, no upstream change
